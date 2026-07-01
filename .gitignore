@@ -1,0 +1,14 @@
+.venv/
+.venv-macos/
+.venv-macos-*/
+__pycache__/
+*.pyc
+.DS_Store
+
+build/
+dist/
+release/
+*.spec
+
+assets/HourlyAlarm.iconset/
+assets/HourlyAlarm.icns

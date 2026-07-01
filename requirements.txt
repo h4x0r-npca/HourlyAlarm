@@ -1,7 +1,7 @@
-pygame==2.5.2
-pystray==0.19.5
-Pillow==10.2.0
-pywin32==306
-winotify==1.1.0
-
-
+pygame>=2.6.1
+Pillow>=11.0.0
+pyobjc-framework-Cocoa>=11.0; sys_platform == "darwin"
+pyobjc-framework-UserNotifications>=11.0; sys_platform == "darwin"
+pystray==0.19.5; sys_platform == "win32"
+pywin32==306; sys_platform == "win32"
+winotify==1.1.0; sys_platform == "win32"
