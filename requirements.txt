@@ -1,5 +1,6 @@
 pygame>=2.6.1
 Pillow>=11.0.0
+customtkinter>=5.2.2
 pyobjc-framework-Cocoa>=11.0; sys_platform == "darwin"
 pyobjc-framework-UserNotifications>=11.0; sys_platform == "darwin"
 pystray==0.19.5; sys_platform == "win32"

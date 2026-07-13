@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 import threading
 import time
 import datetime
@@ -7,18 +7,23 @@ import os
 import sys
 import platform
 import plistlib
+import json
 import queue
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pygame
+import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_MACOS = platform.system() == "Darwin"
 APP_NAME = "HourlyAlarm"
 LAUNCH_AGENT_LABEL = "com.kyo.hourlyalarm"
+
+ctk.set_appearance_mode("system")
+ctk.set_default_color_theme("blue")
 
 if IS_WINDOWS:
     import ctypes
@@ -156,25 +161,29 @@ def resource_path(rel_path: str) -> str:
 
 class HourlyAlarmApp:
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("정각 알림 프로그램")
-        if IS_MACOS:
-            self.root.geometry("560x540")
-            self.root.minsize(560, 540)
-            self.root.resizable(True, True)
-        else:
-            self.root.geometry("380x450")
-            self.root.resizable(False, False)
+        self.root = ctk.CTk()
+        self.root.title("시간 알리미")
+        self.root.geometry("720x760")
+        self.root.minsize(640, 680)
+        self.root.resizable(True, True)
         self.ui_font = "맑은 고딕" if IS_WINDOWS else "AppleGothic" if IS_MACOS else "TkDefaultFont"
 
         # ===== 상태 변수 =====
-        self.alarm_enabled = tk.BooleanVar(value=True)
-        self.alarm_enabled_value = True
+        self.default_sound_file = resource_path("Ring10.wav")
+        self.default_half_hour_sound_file = resource_path("love-emote-animal-crossing.mp3")
+        settings = self._load_settings()
+
+        self.alarm_enabled_value = bool(settings.get("hourly_enabled", True))
+        self.half_hour_alarm_enabled_value = bool(settings.get("half_hour_enabled", True))
+        self.alarm_enabled = tk.BooleanVar(value=self.alarm_enabled_value)
+        self.half_hour_alarm_enabled = tk.BooleanVar(value=self.half_hour_alarm_enabled_value)
         self.autostart_enabled = tk.BooleanVar(value=False)
 
-        # ★ 기본 알림음 경로 + 현재 사용 음원 경로
-        self.default_sound_file = resource_path("Ring10.wav")
-        self.sound_file = self.default_sound_file
+        # 각 알림은 서로 다른 음원을 사용할 수 있습니다.
+        self.sound_file = self._valid_saved_sound(settings.get("hourly_sound"), self.default_sound_file)
+        self.half_hour_sound_file = self._valid_saved_sound(
+            settings.get("half_hour_sound"), self.default_half_hour_sound_file
+        )
 
         self.running = True
         self.alarm_thread = None
@@ -230,98 +239,175 @@ class HourlyAlarmApp:
             self.root.after(300, self._process_notification_prompt_queue)
             self.root.after(700, self._configure_macos_notifications)
 
+    def _settings_path(self):
+        if IS_WINDOWS:
+            base_dir = Path(os.getenv("APPDATA", Path.home()))
+        elif IS_MACOS:
+            base_dir = Path.home() / "Library" / "Application Support"
+        else:
+            base_dir = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+        return base_dir / APP_NAME / "settings.json"
+
+    def _load_settings(self):
+        try:
+            with self._settings_path().open("r", encoding="utf-8") as fp:
+                data = json.load(fp)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _save_settings(self):
+        data = {
+            "hourly_enabled": self.alarm_enabled_value,
+            "half_hour_enabled": self.half_hour_alarm_enabled_value,
+            "hourly_sound": self.sound_file,
+            "half_hour_sound": self.half_hour_sound_file,
+        }
+        try:
+            path = self._settings_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as fp:
+                json.dump(data, fp, ensure_ascii=False, indent=2)
+        except OSError as e:
+            print(f"설정 저장 오류: {e}")
+
+    @staticmethod
+    def _valid_saved_sound(saved_path, default_path):
+        if saved_path and os.path.isfile(saved_path):
+            return saved_path
+        return default_path
+
     # ================= GUI =================
     def setup_gui(self):
-        padding = "24" if IS_MACOS else "20"
-        sound_wraplength = 500 if IS_MACOS else 330
-
+        self.root.configure(fg_color=("#eef3f8", "#0b1118"))
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
-        main_frame = ttk.Frame(self.root, padding=padding)
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        for column in range(3):
-            main_frame.grid_columnconfigure(column, weight=1, uniform="main")
+        main_frame = ctk.CTkScrollableFrame(self.root, fg_color="transparent", corner_radius=0)
+        main_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        main_frame.grid_columnconfigure(0, weight=1)
 
-        title_label = ttk.Label(main_frame, text="⏰ 정각 알림 프로그램", font=(self.ui_font, 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        header = ctk.CTkFrame(main_frame, fg_color=("#176bcb", "#155aa7"), corner_radius=20)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            header, text="시간 알리미", text_color="white",
+            font=ctk.CTkFont(family=self.ui_font, size=26, weight="bold")
+        ).grid(row=0, column=0, sticky="w", padx=24, pady=(22, 2))
+        ctk.CTkLabel(
+            header, text="매 시각과 30분을 원하는 소리로 알려드려요.", text_color="#dcecff",
+            font=ctk.CTkFont(family=self.ui_font, size=13)
+        ).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 22))
 
-        alarm_check = ttk.Checkbutton(
-            main_frame, text="정각 알림 활성화",
-            variable=self.alarm_enabled, command=self.toggle_alarm
+        self._create_alarm_card(
+            main_frame, row=1, title="정각 알림", subtitle="매 시간 00분에 알림",
+            variable=self.alarm_enabled, toggle_command=self.toggle_alarm,
+            sound_kind="hourly"
         )
-        alarm_check.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=10)
+        self._create_alarm_card(
+            main_frame, row=2, title="30분 알림", subtitle="매 시간 30분에 알림",
+            variable=self.half_hour_alarm_enabled, toggle_command=self.toggle_half_hour_alarm,
+            sound_kind="half_hour"
+        )
 
+        settings_card = ctk.CTkFrame(main_frame, corner_radius=18, fg_color=("#ffffff", "#151e29"))
+        settings_card.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        settings_card.grid_columnconfigure(0, weight=1)
         autostart_text = "Mac 로그인 시 자동 실행" if IS_MACOS else "컴퓨터 시작 시 자동 실행"
-        autostart_check = ttk.Checkbutton(
-            main_frame, text=autostart_text,
-            variable=self.autostart_enabled, command=self.toggle_autostart
+        ctk.CTkLabel(
+            settings_card, text="시작 설정", anchor="w",
+            font=ctk.CTkFont(family=self.ui_font, size=16, weight="bold")
+        ).grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 2))
+        ctk.CTkLabel(
+            settings_card, text="백그라운드에서 알림을 놓치지 않도록 실행합니다.", anchor="w",
+            text_color=("#667085", "#9aa7b6"), font=ctk.CTkFont(family=self.ui_font, size=12)
+        ).grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 14))
+        ctk.CTkSwitch(
+            settings_card, text=autostart_text, variable=self.autostart_enabled,
+            command=self.toggle_autostart, font=ctk.CTkFont(family=self.ui_font, size=13)
+        ).grid(row=2, column=0, sticky="w", padx=20, pady=(0, 18))
+
+        clock_card = ctk.CTkFrame(main_frame, corner_radius=18, fg_color=("#ffffff", "#151e29"))
+        clock_card.grid(row=4, column=0, sticky="ew", pady=(0, 14))
+        clock_card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            clock_card, text="현재 시간", text_color=("#667085", "#9aa7b6"),
+            font=ctk.CTkFont(family=self.ui_font, size=12)
+        ).grid(row=0, column=0, pady=(16, 0))
+        self.current_time_label = ctk.CTkLabel(
+            clock_card, text="", font=ctk.CTkFont(family=self.ui_font, size=21, weight="bold")
         )
-        autostart_check.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=10)
-
-        separator1 = ttk.Separator(main_frame, orient='horizontal')
-        separator1.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=15)
-
-        sound_label = ttk.Label(main_frame, text="알림 사운드:", font=(self.ui_font, 10, "bold"))
-        sound_label.grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(0, 5))
-
-        # 사운드 파일 표시(초기엔 '기본알림음'으로 표시)
-        self.sound_file_label = ttk.Label(
-            main_frame, text="", foreground="blue", wraplength=sound_wraplength, anchor="w", justify="left"
+        self.current_time_label.grid(row=1, column=0, pady=(2, 4))
+        self.status_label = ctk.CTkLabel(
+            clock_card, text="알림 설정이 준비되었습니다.", text_color=("#176bcb", "#65a8ff"),
+            font=ctk.CTkFont(family=self.ui_font, size=12)
         )
-        self.sound_file_label.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        self._update_sound_label()  # ★ 라벨 갱신
-
-        # 버튼들
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=6, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
-
-        ttk.Button(button_frame, text="사운드 변경", command=self.change_sound_file)\
-            .grid(row=0, column=0, padx=5, sticky=(tk.W, tk.E))
-        ttk.Button(button_frame, text="사운드 테스트", command=self.test_sound)\
-            .grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
-        ttk.Button(button_frame, text="기본알림음으로 변경", command=self.reset_to_default_sound)\
-            .grid(row=0, column=2, padx=5, sticky=(tk.W, tk.E))
-
-        for column in range(3):
-            button_frame.grid_columnconfigure(column, weight=1, uniform="sound_buttons")
-
-        separator2 = ttk.Separator(main_frame, orient='horizontal')
-        separator2.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=15)
-
-        # ── 현재 시간 라인을 한 줄에 배치 (pack 사용)
-        time_row = ttk.Frame(main_frame)
-        time_row.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 0))
-
-        lbl_now = ttk.Label(time_row, text="현재 시간:", font=(self.ui_font, 10))
-        lbl_now.pack(side="left", padx=(0, 8))
-
-        self.current_time_label = ttk.Label(
-            time_row,
-            text="",
-            font=(self.ui_font, 12, "bold"),
-            foreground="green",
-            anchor="w",     # 라벨 내부 좌측 정렬
-            justify="left"
-        )
-        self.current_time_label.pack(side="left")
-        # 제작자 표기
-        self.author_label = ttk.Label(
-            main_frame,
-            text="제작자  Kyo : dersertfox@kakao.com",
-            font=(self.ui_font, 9),
-            foreground="#6b7280"
-        )
-        self.author_label.grid(row=9, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
+        self.status_label.grid(row=2, column=0, pady=(0, 16))
 
         minimize_text = "시스템 트레이로 최소화" if IS_WINDOWS and self.tray_available else "창 숨기기"
-        ttk.Button(main_frame, text=minimize_text, command=self.minimize_to_tray)\
-            .grid(row=10, column=0, columnspan=3, pady=(20, 0), sticky=(tk.W, tk.E))
+        ctk.CTkButton(
+            main_frame, text=minimize_text, height=44, corner_radius=12,
+            command=self.minimize_to_tray, font=ctk.CTkFont(family=self.ui_font, size=14, weight="bold")
+        ).grid(row=5, column=0, sticky="ew")
+        ctk.CTkLabel(
+            main_frame, text="Kyo · dersertfox@kakao.com", text_color=("#7b8794", "#718096"),
+            font=ctk.CTkFont(family=self.ui_font, size=10)
+        ).grid(row=6, column=0, pady=(12, 2))
+
+        self._update_sound_label()
 
         self.update_time_display()
 
+    def _create_alarm_card(self, parent, row, title, subtitle, variable, toggle_command, sound_kind):
+        card = ctk.CTkFrame(parent, corner_radius=18, fg_color=("#ffffff", "#151e29"))
+        card.grid(row=row, column=0, sticky="ew", pady=(0, 14))
+        card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            card, text=title, anchor="w", font=ctk.CTkFont(family=self.ui_font, size=18, weight="bold")
+        ).grid(row=0, column=0, sticky="ew", padx=(20, 8), pady=(18, 1))
+        ctk.CTkSwitch(card, text="", variable=variable, command=toggle_command, width=48).grid(
+            row=0, column=1, padx=(8, 20), pady=(18, 1)
+        )
+        ctk.CTkLabel(
+            card, text=subtitle, anchor="w", text_color=("#667085", "#9aa7b6"),
+            font=ctk.CTkFont(family=self.ui_font, size=12)
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 12))
+
+        sound_box = ctk.CTkFrame(card, fg_color=("#f1f5f9", "#202b38"), corner_radius=10)
+        sound_box.grid(row=2, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 12))
+        sound_box.grid_columnconfigure(0, weight=1)
+        label = ctk.CTkLabel(
+            sound_box, text="", anchor="w", text_color=("#344054", "#d0d8e2"),
+            font=ctk.CTkFont(family=self.ui_font, size=12)
+        )
+        label.grid(row=0, column=0, sticky="ew", padx=13, pady=10)
+        if sound_kind == "hourly":
+            self.sound_file_label = label
+        else:
+            self.half_hour_sound_file_label = label
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 18))
+        for column in range(3):
+            buttons.grid_columnconfigure(column, weight=1, uniform="sound")
+        ctk.CTkButton(
+            buttons, text="소리 변경", height=34, corner_radius=9,
+            command=lambda: self.change_sound_file(sound_kind)
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(
+            buttons, text="미리 듣기", height=34, corner_radius=9,
+            fg_color=("#e5edf6", "#29384a"), hover_color=("#d4e1ef", "#34475d"),
+            text_color=("#1f4f7a", "#d9e9fa"), command=lambda: self.test_sound(sound_kind)
+        ).grid(row=0, column=1, sticky="ew", padx=4)
+        ctk.CTkButton(
+            buttons, text="기본음", height=34, corner_radius=9,
+            fg_color=("#e5edf6", "#29384a"), hover_color=("#d4e1ef", "#34475d"),
+            text_color=("#1f4f7a", "#d9e9fa"), command=lambda: self.reset_to_default_sound(sound_kind)
+        ).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+
     def update_time_display(self):
-        self.current_time_label.config(text=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self.current_time_label.configure(text=datetime.datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
         self.root.after(1000, self.update_time_display)
 
     def _apply_window_icon(self):
@@ -336,21 +422,32 @@ class HourlyAlarmApp:
     # ================= 토글/설정 =================
     def toggle_alarm(self):
         self.alarm_enabled_value = self.alarm_enabled.get()
-        if self.alarm_enabled_value:
-            messagebox.showinfo("알림", "정각 알림이 활성화되었습니다.")
-        else:
-            messagebox.showinfo("알림", "정각 알림이 비활성화되었습니다.")
+        self._save_settings()
+        state = "켜졌습니다" if self.alarm_enabled_value else "꺼졌습니다"
+        self._set_status(f"정각 알림이 {state}.")
+
+    def toggle_half_hour_alarm(self):
+        self.half_hour_alarm_enabled_value = self.half_hour_alarm_enabled.get()
+        self._save_settings()
+        state = "켜졌습니다" if self.half_hour_alarm_enabled_value else "꺼졌습니다"
+        self._set_status(f"30분 알림이 {state}.")
+
+    def _set_status(self, message):
+        try:
+            self.status_label.configure(text=message)
+        except (AttributeError, tk.TclError):
+            pass
 
     def toggle_autostart(self):
         if self.autostart_enabled.get():
             if self.add_to_startup():
-                messagebox.showinfo("성공", "시작 프로그램에 등록되었습니다.")
+                self._set_status("자동 실행이 켜졌습니다.")
             else:
                 self.autostart_enabled.set(False)
                 messagebox.showerror("오류", "시작 프로그램 등록에 실패했습니다.")
         else:
             if self.remove_from_startup():
-                messagebox.showinfo("성공", "시작 프로그램에서 제거되었습니다.")
+                self._set_status("자동 실행이 꺼졌습니다.")
             else:
                 self.autostart_enabled.set(True)
                 messagebox.showerror("오류", "시작 프로그램 제거에 실패했습니다.")
@@ -383,7 +480,7 @@ class HourlyAlarmApp:
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.TargetPath = target_path
             shortcut.WorkingDirectory = working_dir
-            shortcut.Description = "정각 알림 프로그램"
+            shortcut.Description = "정각 및 30분 시간 알림 프로그램"
             shortcut.save()
             return True
         except Exception as e:
@@ -476,19 +573,23 @@ class HourlyAlarmApp:
 
     # ================= 사운드/알림 =================
     def _update_sound_label(self):
-        """사운드 라벨 텍스트 갱신: 기본알림음 또는 파일명만 표시"""
+        """정각/30분 알림의 현재 음원 이름을 갱신합니다."""
         try:
+            hourly_name = os.path.basename(self.sound_file)
             if os.path.abspath(self.sound_file) == os.path.abspath(self.default_sound_file):
-                name = "기본알림음"
-            else:
-                name = os.path.basename(self.sound_file)
-            self.sound_file_label.config(text=name)
-        except Exception:
+                hourly_name += "  ·  기본음"
+            half_hour_name = os.path.basename(self.half_hour_sound_file)
+            if os.path.abspath(self.half_hour_sound_file) == os.path.abspath(self.default_half_hour_sound_file):
+                half_hour_name += "  ·  기본음"
+            self.sound_file_label.configure(text=f"♪  {hourly_name}")
+            self.half_hour_sound_file_label.configure(text=f"♪  {half_hour_name}")
+        except (AttributeError, tk.TclError):
             pass
 
-    def change_sound_file(self):
+    def change_sound_file(self, sound_kind="hourly"):
+        alarm_name = "30분" if sound_kind == "half_hour" else "정각"
         filename = filedialog.askopenfilename(
-            title="알림 사운드 선택",
+            title=f"{alarm_name} 알림 사운드 선택",
             filetypes=[("오디오 파일", "*.wav *.mp3 *.ogg"),
                        ("WAV 파일", "*.wav"),
                        ("MP3 파일", "*.mp3"),
@@ -496,48 +597,62 @@ class HourlyAlarmApp:
                        ("모든 파일", "*.*")]
         )
         if filename:
-            self.sound_file = filename
+            if sound_kind == "half_hour":
+                self.half_hour_sound_file = filename
+            else:
+                self.sound_file = filename
             self._update_sound_label()
-            messagebox.showinfo("성공", "알림 사운드가 변경되었습니다.")
+            self._save_settings()
+            self._set_status(f"{alarm_name} 알림 소리를 변경했습니다.")
 
-    def reset_to_default_sound(self):
-        """기본알림음(Ring10.wav)으로 되돌리기"""
-        self.sound_file = self.default_sound_file
+    def reset_to_default_sound(self, sound_kind="hourly"):
+        if sound_kind == "half_hour":
+            self.half_hour_sound_file = self.default_half_hour_sound_file
+            alarm_name = "30분"
+        else:
+            self.sound_file = self.default_sound_file
+            alarm_name = "정각"
         self._update_sound_label()
-        messagebox.showinfo("완료", "알림 사운드가 기본알림음으로 변경되었습니다.")
+        self._save_settings()
+        self._set_status(f"{alarm_name} 알림 소리를 기본음으로 바꿨습니다.")
 
-    def test_sound(self):
-        if not os.path.exists(self.sound_file):
+    def test_sound(self, sound_kind="hourly"):
+        sound_file = self.half_hour_sound_file if sound_kind == "half_hour" else self.sound_file
+        alarm_name = "30분" if sound_kind == "half_hour" else "정각"
+        if not os.path.exists(sound_file):
             messagebox.showerror("오류", "사운드 파일을 찾을 수 없습니다.")
             return
         if not self.audio_ready:
             messagebox.showerror("오류", "오디오 장치를 초기화하지 못했습니다.")
             return
         try:
-            pygame.mixer.music.load(self.sound_file)
+            pygame.mixer.music.load(sound_file)
             pygame.mixer.music.play()
+            self._set_status(f"{alarm_name} 알림 소리를 재생하고 있습니다.")
         except Exception as e:
             messagebox.showerror("오류", f"사운드 재생 실패: {e}")
 
-    def play_alarm(self):
+    def play_alarm(self, sound_file):
         try:
-            if self.audio_ready and os.path.exists(self.sound_file):
-                pygame.mixer.music.load(self.sound_file)
+            if self.audio_ready and os.path.exists(sound_file):
+                pygame.mixer.music.load(sound_file)
                 pygame.mixer.music.play()
         except Exception as e:
             print(f"알람 재생 오류: {e}")
 
-    def show_toast_notification(self, hour):
+    def show_toast_notification(self, hour, sound_kind="hourly"):
         try:
-            message = f"{hour}시 정각입니다"
+            is_half_hour = sound_kind == "half_hour"
+            title = "30분 알림" if is_half_hour else "정각 알림"
+            message = f"{hour}시 30분입니다" if is_half_hour else f"{hour}시 정각입니다"
             if IS_WINDOWS:
-                toast = Notification(app_id="정각 알림", title="⏰ 정각 알림", msg=message, duration="short")
+                toast = Notification(app_id="시간 알리미", title=f"⏰ {title}", msg=message, duration="short")
                 toast.set_audio(audio.Default, loop=False)
                 toast.show()
             elif IS_MACOS:
-                self._show_macos_notification(message)
+                self._show_macos_notification(title, message)
             else:
-                print(f"정각 알림: {message}")
+                print(f"{title}: {message}")
         except Exception as e:
             print(f"토스트 알림 오류: {e}")
 
@@ -593,7 +708,7 @@ class HourlyAlarmApp:
             self.notification_prompt_shown = True
             allow = messagebox.askyesno(
                 "알림 권한 필요",
-                "정각 알림을 화면 오른쪽 상단 배너로 표시하려면 macOS 알림 권한이 필요합니다.\n\n지금 알림을 허용하시겠습니까?"
+                "시간 알림을 화면 오른쪽 상단 배너로 표시하려면 macOS 알림 권한이 필요합니다.\n\n지금 알림을 허용하시겠습니까?"
             )
             if allow:
                 self._request_macos_notification_authorization()
@@ -655,20 +770,20 @@ class HourlyAlarmApp:
             if result.returncode == 0:
                 break
 
-    def _show_macos_notification(self, message):
+    def _show_macos_notification(self, title, message):
         if self.notification_center is None:
             script = (
                 f"display notification {self._apple_script_string(message)} "
-                f"with title {self._apple_script_string('정각 알림')}"
+                f"with title {self._apple_script_string(title)}"
             )
             subprocess.run(["osascript", "-e", script], check=False)
             return
 
         content = UNMutableNotificationContent.alloc().init()
-        content.setTitle_("정각 알림")
+        content.setTitle_(title)
         content.setBody_(message)
 
-        identifier = f"hourly-alarm-{datetime.datetime.now().timestamp()}"
+        identifier = f"time-alarm-{datetime.datetime.now().timestamp()}"
         request = UNNotificationRequest.requestWithIdentifier_content_trigger_(identifier, content, None)
         self.notification_center.addNotificationRequest_withCompletionHandler_(
             request,
@@ -677,16 +792,25 @@ class HourlyAlarmApp:
 
     # ================= 알람 스레드 =================
     def alarm_worker(self):
-        last_hour = -1
+        last_trigger = None
         while self.running:
-            if self.alarm_enabled_value:
-                now = datetime.datetime.now()
-                if now.minute == 0 and now.second == 0 and now.hour != last_hour:
-                    self.play_alarm()
-                    self.show_toast_notification(now.hour)
-                    last_hour = now.hour
-                if now.minute == 1:
-                    last_hour = -1
+            now = datetime.datetime.now()
+            trigger_key = (now.date(), now.hour, now.minute)
+            sound_kind = None
+            sound_file = None
+
+            if now.minute == 0 and self.alarm_enabled_value:
+                sound_kind = "hourly"
+                sound_file = self.sound_file
+            elif now.minute == 30 and self.half_hour_alarm_enabled_value:
+                sound_kind = "half_hour"
+                sound_file = self.half_hour_sound_file
+
+            # 2초의 여유를 두어 시스템 부하로 00초를 한 번 건너뛰어도 울리게 합니다.
+            if sound_kind and now.second < 2 and trigger_key != last_trigger:
+                self.play_alarm(sound_file)
+                self.show_toast_notification(now.hour, sound_kind)
+                last_trigger = trigger_key
             time.sleep(0.5)
 
     def start_alarm_thread(self):
@@ -767,7 +891,7 @@ class HourlyAlarmApp:
             pystray.MenuItem("열기", self.show_window, default=True),  # 더블클릭 = 열기
             pystray.MenuItem("종료", self.quit_app)
         )
-        self.tray_icon = pystray.Icon("hourly_alarm", image, "정각 알림", menu)
+        self.tray_icon = pystray.Icon("hourly_alarm", image, "시간 알리미", menu)
 
     def _ensure_tray_running(self):
         """아이콘 런루프를 한 번만 실행"""
