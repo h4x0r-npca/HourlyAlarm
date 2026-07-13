@@ -17,6 +17,12 @@ PY_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sy
 VENV_DIR="${VENV_DIR:-.venv-macos-$PY_VERSION}"
 APP_NAME="HourlyAlarm"
 BUNDLE_ID="com.kyo.hourlyalarm"
+APP_VERSION="${APP_VERSION:-1.0.1}"
+
+if [[ ! "$APP_VERSION" =~ ^[0-9]+([.][0-9]+){1,2}$ ]]; then
+  echo "Invalid APP_VERSION: $APP_VERSION (expected: 1.0 or 1.0.1)"
+  exit 1
+fi
 
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
@@ -31,8 +37,17 @@ BUNDLE_ID="com.kyo.hourlyalarm"
   --name "$APP_NAME" \
   --osx-bundle-identifier "$BUNDLE_ID" \
   --icon assets/HourlyAlarm.icns \
+  --collect-data customtkinter \
   --add-data "Ring10.wav:." \
+  --add-data "love-emote-animal-crossing.mp3:." \
   --add-data "clock.ico:." \
   HourlyAlram.py
+
+PLIST_PATH="dist/$APP_NAME.app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$PLIST_PATH"
+if ! /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $APP_VERSION" "$PLIST_PATH" 2>/dev/null; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$PLIST_PATH"
+fi
+codesign --force --deep --sign - "dist/$APP_NAME.app"
 
 echo "Built dist/$APP_NAME.app"
